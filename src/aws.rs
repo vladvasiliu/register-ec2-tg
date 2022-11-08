@@ -15,30 +15,28 @@ pub async fn get_instance_id() -> Result<String> {
 
 pub struct AwsClient {
     client: aws_sdk_elasticloadbalancingv2::Client,
-    instance_id: String,
-    port: Option<i32>,
+    target_description: TargetDescription,
 }
 
 impl AwsClient {
     pub async fn new(instance_id: &str, port: Option<i32>) -> Self {
         let shared_config = aws_config::load_from_env().await;
         let client = aws_sdk_elasticloadbalancingv2::Client::new(&shared_config);
+        let target_description = TargetDescription::builder()
+            .id(instance_id)
+            .set_port(port)
+            .build();
         Self {
             client,
-            instance_id: instance_id.into(),
-            port,
+            target_description,
         }
     }
 
     pub async fn register_target(&self, tg_arn: &str) -> Result<()> {
-        let target_description = TargetDescription::builder()
-            .id(&self.instance_id)
-            .set_port(self.port)
-            .build();
         self.client
             .register_targets()
             .target_group_arn(tg_arn)
-            .targets(target_description)
+            .targets(self.target_description.clone())
             .send()
             .await
             .context("Failed to register target")?;
@@ -46,14 +44,10 @@ impl AwsClient {
     }
 
     pub async fn deregister_target(&self, tg_arn: &str) -> Result<()> {
-        let target_description = TargetDescription::builder()
-            .id(&self.instance_id)
-            .set_port(self.port)
-            .build();
         self.client
             .deregister_targets()
             .target_group_arn(tg_arn)
-            .targets(target_description)
+            .targets(self.target_description.clone())
             .send()
             .await
             .context("Failed to deregister target")?;
