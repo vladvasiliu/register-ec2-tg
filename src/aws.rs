@@ -1,5 +1,7 @@
 use anyhow::{anyhow, Context, Result};
 use aws_sdk_elasticloadbalancingv2::model::TargetDescription;
+use log::info;
+use tokio::time::{sleep, Duration};
 
 pub async fn get_instance_id() -> Result<String> {
     let imds_client = aws_config::imds::Client::builder()
@@ -43,7 +45,7 @@ impl AwsClient {
         Ok(())
     }
 
-    pub async fn deregister_target(&self, tg_arn: &str) -> Result<()> {
+    pub async fn deregister_target(&self, tg_arn: &str, wait: bool) -> Result<()> {
         self.client
             .deregister_targets()
             .target_group_arn(tg_arn)
@@ -51,10 +53,21 @@ impl AwsClient {
             .send()
             .await
             .context("Failed to deregister target")?;
+        if wait {
+            let timeout = self.get_tg_deregistration_timeout(tg_arn).await?;
+            info!(
+                "Waiting {} seconds for deregistration in target group {}",
+                timeout, tg_arn
+            );
+            let duration = Duration::from_secs(timeout as u64);
+            sleep(duration).await;
+        } else {
+            info!("Wait disabled");
+        }
         Ok(())
     }
 
-    pub async fn get_tg_deregistration_timeout(&self, tg_arn: &str) -> Result<u8> {
+    pub async fn get_tg_deregistration_timeout(&self, tg_arn: &str) -> Result<u32> {
         let attributes_result = self
             .client
             .describe_target_group_attributes()
@@ -68,7 +81,11 @@ impl AwsClient {
 
         let mut timeouts = attributes
             .iter()
-            .filter_map(|a| a.key().and(a.value()))
+            .filter_map(|a| {
+                a.key()
+                    .filter(|k| k.eq_ignore_ascii_case("deregistration_delay.timeout_seconds"))
+                    .and(a.value())
+            })
             .collect::<Vec<&str>>();
 
         if timeouts.len() != 1 {
@@ -78,7 +95,7 @@ impl AwsClient {
         timeouts
             .pop()
             .unwrap()
-            .parse::<u8>()
+            .parse::<u32>()
             .context("Invalid deregistration timeout")
     }
 }

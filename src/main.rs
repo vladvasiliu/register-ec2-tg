@@ -1,7 +1,9 @@
-use crate::aws::AwsClient;
+use crate::aws::{get_instance_id, AwsClient};
 use anyhow::Result;
 use clap::{ArgAction, Parser, ValueEnum};
-use log::{info, LevelFilter};
+use log::{info, warn, LevelFilter};
+use std::sync::Arc;
+use tokio::task::JoinSet;
 
 mod aws;
 
@@ -32,10 +34,33 @@ async fn main() -> Result<()> {
         env!("CARGO_PKG_VERSION")
     );
 
-    let instance_id = "i-0bd1cfe80316e9429";
+    let instance_id = get_instance_id().await?;
+    info!("Running on instance id {}", instance_id);
 
-    let aws_client = AwsClient::new(instance_id, None).await;
-    aws_client.register_target(&config.tg_arns[0]).await?;
+    let aws_client = Arc::new(AwsClient::new(&instance_id, None).await);
+
+    let mut task_set = JoinSet::new();
+    for tg_arn in config.tg_arns {
+        let aws_client = aws_client.clone();
+        let tg_arn = tg_arn.clone();
+        match config.action {
+            Action::Deregister => {
+                task_set
+                    .spawn(async move { aws_client.deregister_target(&tg_arn, config.wait).await });
+            }
+            Action::Register => {
+                task_set.spawn(async move { aws_client.register_target(&tg_arn).await });
+            }
+        }
+    }
+
+    while let Some(res) = task_set.join_next().await {
+        if let Err(err) = res {
+            warn!("Task error: {:?}", err);
+        }
+    }
+
+    info!("Done");
 
     Ok(())
 }
@@ -57,4 +82,6 @@ struct Config {
     debug: bool,
     #[arg(value_enum)]
     action: Action,
+    #[arg(long, default_value_t = true)]
+    wait: bool,
 }
