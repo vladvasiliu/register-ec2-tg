@@ -45,6 +45,21 @@ impl AwsClient {
         Ok(())
     }
 
+    pub async fn deregister_target(&self, tg_arn: &str) -> Result<()> {
+        let target_description = TargetDescription::builder()
+            .id(&self.instance_id)
+            .set_port(self.port)
+            .build();
+        self.client
+            .deregister_targets()
+            .target_group_arn(tg_arn)
+            .targets(target_description)
+            .send()
+            .await
+            .context("Failed to deregister target")?;
+        Ok(())
+    }
+
     pub async fn get_tg_deregistration_timeout(&self, tg_arn: &str) -> Result<u8> {
         let attributes_result = self
             .client
